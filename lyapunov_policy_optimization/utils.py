@@ -6,8 +6,8 @@ def Plot3D(X, Y, V, r):
     # Plot Lyapunov functions  
     fig = plt.figure()
     ax = fig.gca(projection='3d')
-    ax.plot_surface(X,Y,V, rstride=5, cstride=5, alpha=0.5, cmap=cm.coolwarm)
-    ax.contour(X,Y,V,10, zdir='z', offset=0, cmap=cm.coolwarm)
+    ax.plot_surface(X, Y, V, rstride=5, cstride=5, alpha=0.5, cmap=cm.coolwarm)
+    ax.contour(X, Y, V, 10, zdir='z', offset=0, cmap=cm.coolwarm)
     
     # Plot Valid region computed by dReal
     theta = np.linspace(0,2*np.pi,50)
@@ -25,12 +25,14 @@ def Plotflow(Xd, Yd, t, f):
     plt.streamplot(Xd,Yd,DX,DY, color=('gray'), linewidth=0.5,
                   density=0.5, arrowstyle='-|>', arrowsize=1.5)
     
-def plot_roa(V_lqr, f):
-
+def plot_2D_roa(P, f):
+    '''
+    Plot Region of attraction for systems with 2 state variables
+    '''
     fig = plt.figure(figsize=(8,6))
     X = np.linspace(-6, 6, 100) 
     Y = np.linspace(-6, 6, 100)
-    x1, x2 = np.meshgrid(X,Y)
+    x1, x2 = np.meshgrid(X, Y)
 
     ax = plt.gca()
     # Vaild Region
@@ -43,10 +45,15 @@ def plot_roa(V_lqr, f):
     Xd, Yd = np.meshgrid(xd,yd)
     t = np.linspace(0,2,100)
     Plotflow(Xd, Yd, t, f) 
-
-    # ax.contour(X, Y, V_lqr-2.6,0,linewidths=2, colors='m',linestyles='--', label='lqr')
-    # plt.title('Region of Attraction')
-    # plt.legend()
-    plt.xlabel('Angle, $\theta$ (rad)')
-    plt.ylabel('Angular velocity $\dot{\theta}$')
+    print(P)
+    # get lyapunov function (x^T P x) for each pair of x,y coordinates
+    V_lqr = P[0, 0]*x1**2 + 2*P[0, 1]*x1*x2 + P[1, 1]*x2**2
+    # why subtract 2.6?
+    ax.contour(X, Y, V_lqr-2.6, 0, linewidths=2, colors='m', linestyles='--', label='lqr')
+    plt.title('Region of Attraction')
+    plt.legend([plt.Rectangle((0,0),1,2,color='k',fill=False,linewidth = 2),
+                plt.Rectangle((0,0),1,2,color='m',fill=False,linewidth = 2,linestyle='--'), C]\
+               ,['NN','LQR', 'Valid Region'],loc='upper right')
+    plt.xlabel(r'Angle, $\theta$ (rad)')
+    plt.ylabel(r'Angular velocity $\dot{\theta}$')
     plt.show()

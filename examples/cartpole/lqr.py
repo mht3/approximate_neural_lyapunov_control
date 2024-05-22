@@ -6,6 +6,12 @@ import gymnasium as gym
 import numpy as np
 from scipy import linalg
 
+import sys, os
+# add module to system path
+cur_path = os.path.dirname(os.path.realpath(__file__))
+module_path = os.path.join(cur_path, '..', '..')
+sys.path.insert(0, module_path)
+
 class LQR():
     '''
     LQR For CartPole Environment
@@ -14,18 +20,20 @@ class LQR():
         # Gymnasium environment
         self.env = env
 
+        # system parameters: see source code
+        # https://github.com/openai/gym/blob/master/gym/envs/classic_control/cartpole.py#L89
         # mass of cart
         self.M = 1. 
         # mass of pole/weight on end
         self.m = 0.1
         m_total = self.m + self.M
         # gravity
-        self.g = 9.81
+        self.g = 9.8
         # cart dampening
         self.delta = 0.
 
-        # length of pole
-        self.l = 1.5
+        # length of pole (0.5 is half of pole length)
+        self.l = 0.5 *2
 
 
         # State space model found Steve Brunton's book page 353
@@ -121,7 +129,7 @@ def checkStability(A, B, K):
 
 if __name__ == '__main__':
     show_gui = True
-    noisy_observer = True
+    noisy_observer = False
     env = gym.make('CartPole-v1', render_mode="human")
     lqr = LQR(env)
     A, B, Q, R, K = lqr.get_system()
@@ -130,13 +138,4 @@ if __name__ == '__main__':
 
     if show_gui:
         lqr.control(noisy_observer=noisy_observer)
-
-    # plotting
-    # algebraic ricatti equation gives p and V = x^TPx is lyapunov function
-    V_lqr = lqr.lyapunov_function
-
-    f = lqr.f
-    # TODO Plot results
-    # utils.plot_roa(V_lqr, f)
-
 
