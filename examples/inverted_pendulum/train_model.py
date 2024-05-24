@@ -7,6 +7,7 @@ module_path = os.path.join(cur_path, '..', '..')
 sys.path.insert(0, module_path)
 
 import torch
+import numpy as np
 from lqr import LQR
 from lyapunov_policy_optimization.models.neural_lyapunov_model import NeuralLyapunovController
 from lyapunov_policy_optimization.loss import LyapunovRisk
@@ -22,7 +23,7 @@ class Trainer():
         self.loss_mode = loss_mode
         if self.loss_mode == 'approx_dynamics' or self.loss_mode == 'approx_lie':
             # use env to get s, a, s' pairs and use finite difference approximation
-            self.env = gym.make('CartPole-v1')
+            self.env = gym.make('Pendulum-v1', g=9.81)
     
     def get_lie_derivative(self, X, V_candidate, f):
         '''
@@ -50,14 +51,15 @@ class Trainer():
         lie_derivative = torch.diagonal((d_x @ f.t()), 0)
         return lie_derivative
     
-    def get_approx_lie_derivative(self, V_candidate, V_candidate_next, dt=0.02):
+    def get_approx_lie_derivative(self, V_candidate, V_candidate_next, dt):
         '''
         Calculates L_V = ∑∂V/∂xᵢ*fᵢ by forward finite difference
                     L_V = (V' - V) / dt
         '''
         return (V_candidate_next - V_candidate) / dt
 
-    def train(self, X, x_0, epochs=2000, verbose=False, every_n_epochs=10, approx_loss=False):
+
+    def train(self, X, x_0, epochs=2000, verbose=False, every_n_epochs=10):
         self.model.train()
         valid = False
         loss_list = []
@@ -85,20 +87,17 @@ class Trainer():
             elif self.loss_mode == 'approx_dynamics':
                 # compute approximate f_dot and compare to true f
                 X_prime = step(X, u, self.env)
-                f_approx = approx_f_value(X, X_prime, dt=0.02)
-                # check dx/dt estimates are close
-                # epsilon for x_dot. cart velocity and angular velocity are easier to approximate than accelerations.
-                # TODO is there a better way to approximate without running throught the simulator multiple times?
-                epsilon = torch.tensor([1e-4, 10., 1e-4, 10.])
-                # assert(torch.all(abs(f - f_approx) < epsilon))
-                # could replace loss function 
+                f = f_value(X, u)
+                f_approx = approx_f_value(X, X_prime, dt=0.05)
+                # TODO: Fix issues with approximation of dynamics
+                # assert(np.isclose(f_approx-f, [10., 10.]).all())
                 L_V_approx = self.get_lie_derivative(X, V_candidate, f_approx)
                 loss = self.lyapunov_loss(V_candidate, L_V_approx, V_X0)
             elif self.loss_mode == 'approx_lie':
                 # compute approximate f_dot and compare to true f
                 X_prime = step(X, u, self.env)
                 V_candidate_prime, u = self.model(X_prime)
-                L_V_approx = self.get_approx_lie_derivative(V_candidate, V_candidate_prime, dt=0.02)
+                L_V_approx = self.get_approx_lie_derivative(V_candidate, V_candidate_prime, dt=0.05)
                 loss = self.lyapunov_loss(V_candidate, L_V_approx, V_X0)
 
             loss_list.append(loss.item())
@@ -116,20 +115,20 @@ def load_model():
     lqr = LQR()
     K = lqr.K
     lqr_val = -torch.Tensor(K)
-    d_in, n_hidden, d_out = 4, 6, 1
+    d_in, n_hidden, d_out = 2, 6, 1
     controller = NeuralLyapunovController(d_in, n_hidden, d_out, lqr_val)
     return controller
 
+@torch.no_grad()
 def step(X, u, env):
     '''
     Generates all X_primes needed given current state and current action
-    X: current position, velocity, pole angle, and pole angular velocity
-    u: input for cartpole 
+    X: current angle and angular velocity
+    u: input torque for inverted pendulum
     '''
     # take step in environment based upon current state and action
     N = X.shape[0]
-    u = torch.clip(u, -10, 10)
-
+    u_numpy = u.cpu().detach().numpy()
     X_prime = torch.empty_like(X)
     observation, info = env.reset()
     for i in range(N):
@@ -139,25 +138,17 @@ def step(X, u, env):
         env.unwrapped.state = x_i
 
         # get current action to take 
-        u_i = u[i][0].detach().numpy()
-        action = 0
-        if u_i > 0:
-            # move cart right
-            action = 1
-        else:
-            # move cart left
-            action = 0
+        u_i = u_numpy[i, :]
 
-        # set magnitude of force as input
-        env.unwrapped.force_mag = abs(u_i)
         # take step in environment
-        observation, reward, terminated, truncated, info = env.step(action)
+        observation, reward, terminated, truncated, info = env.step(u_i)
         # add sample to X_prime
-        X_prime[i, :] = torch.tensor(observation)
+        X_prime[i, :] = torch.from_numpy(env.unwrapped.state)
+
 
     return X_prime
 
-def approx_f_value(X, X_prime, dt=0.02):
+def approx_f_value(X, X_prime, dt):
     # Approximate f value with S, a, S'
     y = (X_prime - X) / dt
     return y
@@ -168,7 +159,6 @@ def f_value(X, u):
     # Get system dynamics for cartpole 
     lqr = LQR()
     A, B, Q, R, K = lqr.get_system()
-    u = torch.clip(u, -10, 10)
     for i in range(0, N): 
         x_i = X[i, :].detach().numpy()
 
@@ -192,7 +182,7 @@ def plot_losses(true_loss, approx_dynamics_loss, approx_lie_loss):
     plt.xlabel('Epochs', size=16)
     plt.grid()
     plt.legend()
-    plt.savefig('examples/cartpole/results/loss_comparison.png')
+    plt.savefig('examples/inverted_pendulum/results/loss_comparison.png')
 
 def load_state(state_min, state_max, N=500):
     # X: Nxlen(state_min) tensor of initial states
@@ -215,15 +205,14 @@ if __name__ == '__main__':
     theta: -12 to 12 degrees
     thata_dot: -2 to 2
     '''
-    state_min = [-2.4, -2., -0.2094, -2]
-    state_max = [2.4, 2., 0.2094, 2]
-
+    # make samples closer to equilibrium
+    state_min = [-torch.pi/8, -0.5]
+    state_max = [torch.pi/8, 0.5]
     # load 500 length 4 vectors of the state at random
     X = load_state(state_min, state_max, N=500)
     # stable conditions (used for V(x_0) = 0)
-    # note that X_p is a free variable and can be at any position
-    x_p_eq, x_v_eq, x_theta_eq, x_theta_dot_eq = 0., 0., 0., 0.
-    X_0 = torch.Tensor([x_p_eq, x_v_eq, x_theta_eq, x_theta_dot_eq])
+    theta_eq, theta_dot_eq = 0., 0.
+    X_0 = torch.Tensor([theta_eq, theta_dot_eq])
 
     ### Start training process ##
     loss_fn = LyapunovRisk(lyapunov_factor=1., lie_factor=1., equilibrium_factor=1.)
@@ -235,7 +224,7 @@ if __name__ == '__main__':
     trainer_1 = Trainer(model_1, lr, optimizer_1, loss_fn, loss_mode='true')
     true_loss = trainer_1.train(X, X_0, epochs=200, verbose=True)
     # save model corresponding to true loss
-    torch.save(model_1.state_dict(), 'examples/cartpole/models/cartpole_lyapunov_model_1.pt')
+    torch.save(model_1.state_dict(), 'examples/inverted_pendulum/models/pendulum_lyapunov_model_1.pt')
     print("Training with approx dynamics loss...")
     model_2 = load_model()
     optimizer_2 = torch.optim.Adam(model_2.parameters(), lr=lr)

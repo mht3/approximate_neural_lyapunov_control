@@ -11,7 +11,6 @@ import sys, os
 cur_path = os.path.dirname(os.path.realpath(__file__))
 module_path = os.path.join(cur_path, '..', '..')
 sys.path.insert(0, module_path)
-from lyapunov_policy_optimization.utils import plot_2D_roa
 
 class LQR():
     '''
@@ -54,6 +53,7 @@ class LQR():
     
     def get_system(self):
         return self.A, self.B, self.Q, self.R, self.K
+
 
     def get_are(self):
         '''
@@ -102,7 +102,6 @@ class LQR():
             action = LQR.get_input(self.K, observation)
 
             observation, reward, terminated, truncated, info = self.env.step(action)
-
             # add small noise to observer (position velocity, pole angle, pole angular velocity)
             if noisy_observer:
                 observation += np.random.normal(0, 0.15, 3)
@@ -122,7 +121,7 @@ def checkStability(A, B, K):
     assert(np.all(eigenvalues.real < 0))
 
 if __name__ == '__main__':
-    show_gui = False
+    show_gui = True
     noisy_observer = False
     env = gym.make('Pendulum-v1', render_mode="human", g=9.81)
 
@@ -134,12 +133,7 @@ if __name__ == '__main__':
     if show_gui:
         lqr.control(noisy_observer=noisy_observer)
 
-    # plotting
-    # algebraic ricatti equation gives p and V = x^TPx is lyapunov function
-    P = lqr.get_are()
-    # print(V_lqr.shape)
-    f = lqr.f
-    # # TODO Plot results
-    plot_2D_roa(P, f)
+
+
 
 

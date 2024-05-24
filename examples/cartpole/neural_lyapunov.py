@@ -88,9 +88,3 @@ if __name__ == '__main__':
     nlc = NeuralLyaponovControl(env, controller)
     if show_gui:
         nlc.control(noisy_observer=noisy_observer)
-
-
-    # TODO Plot results
-    # utils.plot_roa(V_lqr, f)
-
-

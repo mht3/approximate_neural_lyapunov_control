@@ -7,7 +7,7 @@ module_path = os.path.join(cur_path, '..', '..')
 sys.path.insert(0, module_path)
 
 import torch
-from lyapunov_policy_optimization.examples.cartpole.lqr import LQR
+from lqr import LQR
 from lyapunov_policy_optimization.models.neural_lyapunov_model import NeuralLyapunovController
 from lyapunov_policy_optimization.loss import LyapunovRisk
 import gymnasium as gym 
@@ -57,7 +57,7 @@ class Trainer():
         '''
         return (V_candidate_next - V_candidate) / dt
 
-    def train(self, X, x_0, epochs=2000, verbose=False, every_n_epochs=10, approx_loss=False):
+    def train(self, X, x_0, epochs=2000, verbose=False, every_n_epochs=10):
         self.model.train()
         valid = False
         loss_list = []
