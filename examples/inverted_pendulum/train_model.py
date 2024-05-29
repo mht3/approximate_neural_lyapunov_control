@@ -6,24 +6,27 @@ cur_path = os.path.dirname(os.path.realpath(__file__))
 module_path = os.path.join(cur_path, '..', '..')
 sys.path.insert(0, module_path)
 
+from matplotlib import pyplot as plt
 import torch
 import numpy as np
 from lqr import LQR
 from lyapunov_policy_optimization.models.neural_lyapunov_model import NeuralLyapunovController
 from lyapunov_policy_optimization.loss import LyapunovRisk
+from lyapunov_policy_optimization.falsifier import Falsifier
+
 import gymnasium as gym 
-from matplotlib import pyplot as plt
 
 class Trainer():
-    def __init__(self, model, lr, optimizer, loss_fn, loss_mode='true'):
+    def __init__(self, model, lr, optimizer, loss_fn, falsifier, loss_mode='true'):
         self.model = model
         self.lr = lr
         self.optimizer = optimizer
         self.lyapunov_loss = loss_fn
         self.loss_mode = loss_mode
-        if self.loss_mode == 'approx_dynamics' or self.loss_mode == 'approx_lie':
-            # use env to get s, a, s' pairs and use finite difference approximation
-            self.env = gym.make('Pendulum-v1', g=9.81)
+        # use env to get s, a, s' pairs and use finite difference approximation
+        self.env = gym.make('Pendulum-v1', g=9.81)
+        # initialize falsifier class with epsilon (constraint on lie derivative falsification)
+        self.falsifier = falsifier
     
     def get_lie_derivative(self, X, V_candidate, f):
         '''
@@ -59,16 +62,11 @@ class Trainer():
         return (V_candidate_next - V_candidate) / dt
 
 
-    def train(self, X, x_0, epochs=2000, verbose=False, every_n_epochs=10):
+    def train(self, X, x_0, epochs=2000, verbose=False, every_n_epochs=10, falsifier_frequency=100):
         self.model.train()
-        valid = False
         loss_list = []
 
         for epoch in range(1, epochs+1):
-            if valid == True:
-                if verbose:
-                    print('Found valid solution.')
-                break
             # zero gradients
             self.optimizer.zero_grad()
 
@@ -82,23 +80,23 @@ class Trainer():
                 # Compute lie derivative of V : L_V = ∑∂V/∂xᵢ*fᵢ
                 f = f_value(X, u)
                 L_V = self.get_lie_derivative(X, V_candidate, f)
-                loss = self.lyapunov_loss(V_candidate, L_V, V_X0)
             
             elif self.loss_mode == 'approx_dynamics':
                 # compute approximate f_dot and compare to true f
                 X_prime = step(X, u, self.env)
-                f = f_value(X, u)
+                # f = f_value(X, u)
                 f_approx = approx_f_value(X, X_prime, dt=0.05)
                 # TODO: Fix issues with approximation of dynamics
                 # assert(np.isclose(f_approx-f, [10., 10.]).all())
-                L_V_approx = self.get_lie_derivative(X, V_candidate, f_approx)
-                loss = self.lyapunov_loss(V_candidate, L_V_approx, V_X0)
+                L_V = self.get_lie_derivative(X, V_candidate, f_approx)
+
             elif self.loss_mode == 'approx_lie':
                 # compute approximate f_dot and compare to true f
                 X_prime = step(X, u, self.env)
                 V_candidate_prime, u = self.model(X_prime)
-                L_V_approx = self.get_approx_lie_derivative(V_candidate, V_candidate_prime, dt=0.05)
-                loss = self.lyapunov_loss(V_candidate, L_V_approx, V_X0)
+                L_V = self.get_approx_lie_derivative(V_candidate, V_candidate_prime, dt=0.05)
+            
+            loss = self.lyapunov_loss(V_candidate, L_V, V_X0)
 
             loss_list.append(loss.item())
             loss.backward()
@@ -106,11 +104,30 @@ class Trainer():
             if verbose and (epoch % every_n_epochs == 0):
                 print('Epoch:\t{}\tLyapunov Risk: {:.4f}'.format(epoch, loss.item()))
 
-            # TODO Add in falsifier here
-            # add counterexamples
-
+            # run falsifier every falsifier_frequency epochs
+            if epoch % (self.falsifier.get_frequency())== 0:
+                counterexamples = self.falsifier.check_lyapunov(X, V_candidate, L_V)
+                if (not (counterexamples is None)): 
+                    print("Not a Lyapunov function. Found {} counterexamples.".format(counterexamples.shape[0]))
+                    # add new counterexamples sampled from old ones
+                    X = self.falsifier.add_counterexamples(X, counterexamples)
+                else:  
+                    if verbose:
+                        print('Found valid solution!')
+                    break
         return loss_list
-    
+
+def plot_loss(true_loss, filename):
+    fig = plt.figure(figsize=(8, 6))
+    plt.plot(range(len(true_loss)), true_loss, label='True Loss')
+
+    plt.ylabel('Lyapunov Risk', size=16)
+    plt.xlabel('Epochs', size=16)
+    plt.grid()
+    plt.legend()
+    plt.savefig(filename)
+
+
 def load_model():
     lqr = LQR()
     K = lqr.K
@@ -171,19 +188,6 @@ def f_value(X, u):
     y = torch.tensor(y)
     return y
 
-def plot_losses(true_loss, approx_dynamics_loss, approx_lie_loss):
-    fig = plt.figure(figsize=(8, 6))
-    x = range(len(true_loss))
-    plt.plot(x, true_loss, label='True Loss')
-    plt.plot(x, approx_dynamics_loss, label='Approximate Dynamics Loss')
-    plt.plot(x, approx_lie_loss, label='Approximate Lie Derivative Loss')
-
-    plt.ylabel('Lyapunov Risk', size=16)
-    plt.xlabel('Epochs', size=16)
-    plt.grid()
-    plt.legend()
-    plt.savefig('examples/inverted_pendulum/results/loss_comparison.png')
-
 def load_state(state_min, state_max, N=500):
     # X: Nxlen(state_min) tensor of initial states
     X = torch.empty(N, 0)
@@ -195,6 +199,8 @@ def load_state(state_min, state_max, N=500):
     return X
 
 if __name__ == '__main__':
+    torch.random.manual_seed(42)
+
     ### Generate random training data ###
     # number of samples
     N = 500
@@ -206,9 +212,9 @@ if __name__ == '__main__':
     thata_dot: -2 to 2
     '''
     # make samples closer to equilibrium
-    state_min = [-torch.pi/8, -0.5]
-    state_max = [torch.pi/8, 0.5]
-    # load 500 length 4 vectors of the state at random
+    state_min = [-6., -6.]
+    state_max = [6., 6.]
+    # load 500 length 2 vectors of the state at random
     X = load_state(state_min, state_max, N=500)
     # stable conditions (used for V(x_0) = 0)
     theta_eq, theta_dot_eq = 0., 0.
@@ -217,24 +223,15 @@ if __name__ == '__main__':
     ### Start training process ##
     loss_fn = LyapunovRisk(lyapunov_factor=1., lie_factor=1., equilibrium_factor=1.)
     lr = 0.01
-    print("Training with true loss...")
+    ### Load falsifier
+    falsifier = Falsifier(state_min, state_max, epsilon=0., scale=0.02, frequency=150, num_samples=10)
+
     ### load model and training pipeline with initialized LQR weights ###
     model_1 = load_model()
     optimizer_1 = torch.optim.Adam(model_1.parameters(), lr=lr)
-    trainer_1 = Trainer(model_1, lr, optimizer_1, loss_fn, loss_mode='true')
-    true_loss = trainer_1.train(X, X_0, epochs=200, verbose=True)
+    trainer_1 = Trainer(model_1, lr, optimizer_1, loss_fn, falsifier=falsifier, loss_mode='true')
+    true_loss = trainer_1.train(X, X_0, epochs=2000, verbose=True)
     # save model corresponding to true loss
     torch.save(model_1.state_dict(), 'examples/inverted_pendulum/models/pendulum_lyapunov_model_1.pt')
-    print("Training with approx dynamics loss...")
-    model_2 = load_model()
-    optimizer_2 = torch.optim.Adam(model_2.parameters(), lr=lr)
-    trainer_2 = Trainer(model_2, lr, optimizer_2, loss_fn, loss_mode='approx_dynamics')
-    # calculate lie derivative when system dynamics are unknown (this model compares the approximate f to the ground truth)
-    approx_dynamics_loss = trainer_2.train(X, X_0, epochs=200, verbose=True)
-    print("Training with approx lie derivative loss...")
-    model_3 = load_model()
-    optimizer_3 = torch.optim.Adam(model_3.parameters(), lr=lr)
-    trainer_3 = Trainer(model_3, lr, optimizer_3, loss_fn, loss_mode='approx_lie')
-    # calculate lie derivative when system dynamics are unknown (this model compares the approximate f to the ground truth)
-    approx_lie_loss = trainer_3.train(X, X_0, epochs=200, verbose=True)
-    plot_losses(true_loss, approx_dynamics_loss, approx_lie_loss)
+
+    plot_loss(true_loss, 'examples/inverted_pendulum/results/true_loss.png')
