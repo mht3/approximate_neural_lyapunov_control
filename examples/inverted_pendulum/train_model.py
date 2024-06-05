@@ -11,17 +11,18 @@ import torch
 import numpy as np
 from lqr import LQR
 from lyapunov_policy_optimization.models.neural_lyapunov_model import NeuralLyapunovController
-from lyapunov_policy_optimization.loss import LyapunovRisk
+from lyapunov_policy_optimization.loss import LyapunovRisk, CircleTuningLoss
 from lyapunov_policy_optimization.falsifier import Falsifier
 
 import gymnasium as gym 
 
 class Trainer():
-    def __init__(self, model, lr, optimizer, loss_fn, falsifier, loss_mode='true'):
+    def __init__(self, model, lr, optimizer, loss_fn, circle_tuning_loss_fn=None, falsifier=None, loss_mode='true'):
         self.model = model
         self.lr = lr
         self.optimizer = optimizer
         self.lyapunov_loss = loss_fn
+        self.circle_tuning_loss = circle_tuning_loss_fn
         self.loss_mode = loss_mode
         # use env to get s, a, s' pairs and use finite difference approximation
         self.env = gym.make('Pendulum-v1', g=9.81)
@@ -61,12 +62,23 @@ class Trainer():
         '''
         return (V_candidate_next - V_candidate) / dt
 
+    def adjust_learning_rate(self, decay_rate=.9):
+        # new_lr = lr * decay_rate
+        for g in self.optimizer.param_groups:
+            g['lr'] = g['lr'] * decay_rate
+    
+    def reset_learning_rate(self, lr):
+        for g in self.optimizer.param_groups:
+            g['lr'] = lr
 
-    def train(self, X, x_0, epochs=2000, verbose=False, every_n_epochs=10, falsifier_frequency=100):
+    def train(self, X, x_0, epochs=2000, verbose=False, every_n_epochs=10, step_size=100, decay_rate=1.):
         self.model.train()
         loss_list = []
-
+        original_size = len(X)
         for epoch in range(1, epochs+1):
+            # lr scheduler
+            if (epoch + 1) % step_size == 0:
+                self.adjust_learning_rate(decay_rate)
             # zero gradients
             self.optimizer.zero_grad()
 
@@ -84,10 +96,11 @@ class Trainer():
             elif self.loss_mode == 'approx_dynamics':
                 # compute approximate f_dot and compare to true f
                 X_prime = step(X, u, self.env)
-                # f = f_value(X, u)
+                f = f_value(X, u)
                 f_approx = approx_f_value(X, X_prime, dt=0.05)
-                # TODO: Fix issues with approximation of dynamics
-                # assert(np.isclose(f_approx-f, [10., 10.]).all())
+                # print(f[0:5])
+                # print(f_approx[0:5])
+                # print('--')
                 L_V = self.get_lie_derivative(X, V_candidate, f_approx)
 
             elif self.loss_mode == 'approx_lie':
@@ -97,7 +110,9 @@ class Trainer():
                 L_V = self.get_approx_lie_derivative(V_candidate, V_candidate_prime, dt=0.05)
             
             loss = self.lyapunov_loss(V_candidate, L_V, V_X0)
-
+            if self.circle_tuning_loss is not None:
+                loss += self.circle_tuning_loss(X, V_candidate)
+        
             loss_list.append(loss.item())
             loss.backward()
             self.optimizer.step() 
@@ -105,18 +120,32 @@ class Trainer():
                 print('Epoch:\t{}\tLyapunov Risk: {:.4f}'.format(epoch, loss.item()))
 
             # run falsifier every falsifier_frequency epochs
-            if epoch % (self.falsifier.get_frequency())== 0:
+            if (self.falsifier is not None) and epoch % (self.falsifier.get_frequency())== 0:
                 counterexamples = self.falsifier.check_lyapunov(X, V_candidate, L_V)
                 if (not (counterexamples is None)): 
                     print("Not a Lyapunov function. Found {} counterexamples.".format(counterexamples.shape[0]))
                     # add new counterexamples sampled from old ones
+                    if self.falsifier.counterexamples_added + len(counterexamples) > original_size:
+                        print("Too many previous counterexamples. Pruning...")
+                        # keep 1/5 of random elements of counterexamples
+                        num_keep = original_size // 5
+                        counterexample_keep_idx = torch.randperm(len(counterexamples))[:num_keep]
+                        cur_counterexamples = X[counterexample_keep_idx]
+                        X = X[:original_size]
+                        X = torch.cat([X, cur_counterexamples], dim=0)
+                        # reset counter
+                        self.falsifier.counterexamples_added = num_keep
+
                     X = self.falsifier.add_counterexamples(X, counterexamples)
+
                 else:  
                     if verbose:
-                        print('Found valid solution!')
-                    break
+                        print('No counterexamples found!')
+                    
         return loss_list
+    
 
+    
 def plot_loss(true_loss, filename):
     fig = plt.figure(figsize=(8, 6))
     plt.plot(range(len(true_loss)), true_loss, label='True Loss')
@@ -126,6 +155,7 @@ def plot_loss(true_loss, filename):
     plt.grid()
     plt.legend()
     plt.savefig(filename)
+
 
 
 def load_model():
@@ -147,21 +177,19 @@ def step(X, u, env):
     N = X.shape[0]
     u_numpy = u.cpu().detach().numpy()
     X_prime = torch.empty_like(X)
-    observation, info = env.reset()
     for i in range(N):
         x_i = X[i, :].detach().numpy()
         # set environment as x_i
         observation, info = env.reset()
-        env.unwrapped.state = x_i
-
         # get current action to take 
         u_i = u_numpy[i, :]
-
+        env.unwrapped.state = x_i
         # take step in environment
         observation, reward, terminated, truncated, info = env.step(u_i)
         # add sample to X_prime
         X_prime[i, :] = torch.from_numpy(env.unwrapped.state)
 
+    X_prime[:, 0] = normalize_angle(X_prime[:, 0])
 
     return X_prime
 
@@ -170,17 +198,24 @@ def approx_f_value(X, X_prime, dt):
     y = (X_prime - X) / dt
     return y
 
+def normalize_angle(angle):
+    '''
+    Normalize the angle to constrain from -pi to pi
+    '''
+    return (angle + np.pi) % (2 * np.pi) - np.pi
+
 def f_value(X, u):
     y = []
     N = X.shape[0]
-    # Get system dynamics for cartpole 
+    # Get linearized system dynamics for cartpole 
     lqr = LQR()
     A, B, Q, R, K = lqr.get_system()
     for i in range(0, N): 
         x_i = X[i, :].detach().numpy()
 
         u_i = u[i].detach().numpy()
-        # xdot = Ax + Bu
+
+        # (linearized) xdot = Ax + Bu
         f = A@x_i + B@u_i
         
         y.append(f.tolist()) 
@@ -212,8 +247,8 @@ if __name__ == '__main__':
     thata_dot: -2 to 2
     '''
     # make samples closer to equilibrium
-    state_min = [-6., -6.]
-    state_max = [6., 6.]
+    state_min = [-np.pi, -np.pi]
+    state_max = [np.pi, np.pi]
     # load 500 length 2 vectors of the state at random
     X = load_state(state_min, state_max, N=500)
     # stable conditions (used for V(x_0) = 0)
@@ -221,16 +256,17 @@ if __name__ == '__main__':
     X_0 = torch.Tensor([theta_eq, theta_dot_eq])
 
     ### Start training process ##
-    loss_fn = LyapunovRisk(lyapunov_factor=1., lie_factor=1., equilibrium_factor=1.)
+    loss_fn = LyapunovRisk(lyapunov_factor=1., lie_factor=1.5, equilibrium_factor=1.)
+    circle_tuning_loss_fn = CircleTuningLoss(state_max=np.mean(state_max), tuning_factor=0.1)
     lr = 0.01
     ### Load falsifier
-    falsifier = Falsifier(state_min, state_max, epsilon=0., scale=0.02, frequency=150, num_samples=10)
-
+    falsifier = Falsifier(state_min, state_max, epsilon=0., scale=0.02, frequency=50, num_samples=5)
     ### load model and training pipeline with initialized LQR weights ###
     model_1 = load_model()
     optimizer_1 = torch.optim.Adam(model_1.parameters(), lr=lr)
-    trainer_1 = Trainer(model_1, lr, optimizer_1, loss_fn, falsifier=falsifier, loss_mode='true')
-    true_loss = trainer_1.train(X, X_0, epochs=2000, verbose=True)
+    trainer_1 = Trainer(model_1, lr, optimizer_1, loss_fn, circle_tuning_loss_fn=circle_tuning_loss_fn,
+                        falsifier=falsifier, loss_mode='true')
+    true_loss = trainer_1.train(X, X_0, epochs=1000, verbose=True, step_size=50, decay_rate=1.0)
     # save model corresponding to true loss
     torch.save(model_1.state_dict(), 'examples/inverted_pendulum/models/pendulum_lyapunov_model_1.pt')
 

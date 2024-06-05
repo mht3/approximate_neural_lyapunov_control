@@ -1,7 +1,7 @@
 import torch
 
 class Falsifier():
-    def __init__(self, lower_bound, upper_bound, epsilon=0., scale=0.1, frequency=100, num_samples=10, env=None):
+    def __init__(self, lower_bound, upper_bound, epsilon=0., scale=0.02, frequency=200, num_samples=10, env=None):
         self.epsilon = epsilon
         self.counterexamples_added = 0
         self.lower_bound = torch.Tensor(lower_bound)
@@ -51,7 +51,7 @@ class Falsifier():
         X: current training data
         counterexamples: all new examples from training data that don't satisfy the lyapunov conditions
         '''        
-        self.counterexamples_added += self.num_samples
+        self.counterexamples_added += len(counterexamples) * self.num_samples
         for i in range(counterexamples.shape[0]):
             samples = torch.empty(self.num_samples, 0)
             counterexample = counterexamples[i]
@@ -60,8 +60,8 @@ class Falsifier():
                 ub = self.upper_bound[j]
                 value = counterexample[j]
                 # Determine the min and max values for each feature in the chosen counterexamples
-                min_value = torch.max(lb, value - self.scale * (value - lb))
-                max_value = torch.min(ub, value + self.scale * (ub - value))
+                min_value = torch.max(lb, value - self.scale * abs(value))
+                max_value = torch.min(ub, value + self.scale * abs(value))
                 
                 sample = torch.Tensor(self.num_samples, 1).uniform_(min_value, max_value)
                 samples = torch.cat([samples, sample], dim=1)
@@ -70,7 +70,8 @@ class Falsifier():
     
 if __name__ == '__main__':
     # small test for falsifier
-    falsifier = Falsifier(lower_bound=[-1., -0.5], upper_bound=[1., 0.5])
+    num_samples=2
+    falsifier = Falsifier(lower_bound=[-1., -0.5], upper_bound=[1., 0.5], num_samples=num_samples)
     x = torch.Tensor(5, 1).uniform_(-1., 1.)
     x = torch.cat((x, torch.Tensor(5, 1).uniform_(-0.5, 0.5)), dim=1)
 
@@ -82,10 +83,10 @@ if __name__ == '__main__':
     L_V = -torch.ones(size=(5,1))
     L_V[1, 0] = 2.5
 
+    # test that we find 3 unique counterexamples and add num_samples*3 to dataset
     counterexamples = falsifier.check_lyapunov(x, V, L_V)
     assert(counterexamples.size(0) == 3)
-    num_samples=2
-    x_new = falsifier.add_counterexamples(x, counterexamples, N=num_samples)
+    x_new = falsifier.add_counterexamples(x, counterexamples)
     assert(x_new.size(0) == num_samples*counterexamples.size(0) + x.size(0))
     print(x)
     print(x_new)

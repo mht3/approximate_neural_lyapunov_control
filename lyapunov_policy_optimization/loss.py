@@ -26,4 +26,29 @@ class LyapunovRisk(torch.nn.Module):
         
         # weight loss factors individually
         total_risk = (self.lyapunov_factor*V_loss +  self.lie_factor*lie_loss).mean() + self.equilibrium_factor*eq_loss
+
         return total_risk
+    
+
+class CircleTuningLoss(torch.nn.Module):
+    def __init__(self, state_max, tuning_factor=0.1):
+        '''
+        state_max: distance from lyapunov function.
+                   Used to calculate normalized difference smaller.
+        tuning_factor: weight for entire loss
+        '''
+        super(CircleTuningLoss, self).__init__()
+        self.tuning_factor = tuning_factor
+        self.state_max = state_max
+
+    def forward(self, X, V_candidate):
+        '''
+        X: Input states
+        V_candidate: Candidate lyapunov function from model output
+        '''
+        l2_norm = torch.sqrt(torch.sum(X**2, dim=1, keepdim=True))
+        # distance of l2 norm of state from scaled lyapunov function 
+        normalized_difference = l2_norm - self.state_max*V_candidate
+        # regularize a circle for lyapunov loss
+        circle_tuning_loss = self.tuning_factor * (normalized_difference**2)
+        return circle_tuning_loss.mean()
