@@ -20,7 +20,7 @@ pip install -r requirements.txt
 
 ## References
 
-This work builds off of Chang et al. by not assuming fully known system dynamics. Because of this, finite difference methods are used to estimate the non-linear dynamics and Lie derivative of the system. Additionally, a sampling-based falsifier is proposed in place of an SMT solver.
+This work builds off of Chang et al. (referenced below) by not assuming fully known system dynamics. Because of this, finite difference methods are used to estimate the non-linear dynamics and Lie derivative of the system. Additionally, a sampling-based falsifier is proposed in place of an SMT solver.
 ```
 @inproceedings{NEURIPS2019_2647c1db,
  author = {Chang, Ya-Chien and Roohi, Nima and Gao, Sicun},
