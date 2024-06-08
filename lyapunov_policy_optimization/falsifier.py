@@ -16,6 +16,9 @@ class Falsifier():
     def get_frequency(self):
         return self.frequency
 
+    def set_frequency(self, freq):
+        self.frequency = freq
+
     @torch.no_grad
     def check_lyapunov(self, X, V_candidate, L_V):    
         '''

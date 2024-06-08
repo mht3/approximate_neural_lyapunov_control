@@ -37,6 +37,7 @@ class LQR():
         self.Q = np.diag([1., 1.])
         self.K = LQR.lqr(self.A, self.B, self.Q, self.R)
 
+
     def f(self, x, t) :
         # theta and theta_dot
         x1, x2 = x
@@ -120,7 +121,7 @@ class LQR():
         return observation
     
     def control(self, noisy_observer=False):
-        initial_state = np.random.uniform([-np.pi/2, -0.5], [np.pi/2, 0.5], size=2)
+        initial_state = np.random.uniform([-np.pi/4, -0.5], [np.pi/4, 0.5], size=2)
         observation = self.reset_env(initial_state)
         for _ in range(1000):
             # get action and input (force) required 
@@ -131,7 +132,7 @@ class LQR():
             if noisy_observer:
                 observation += np.random.normal(0, 0.15, 3)
             if terminated or truncated:
-                initial_state = np.random.uniform([-np.pi/2, -0.5], [np.pi/2, 0.5], size=2)
+                initial_state = np.random.uniform([-np.pi/4, -0.5], [np.pi/4, 0.5], size=2)
                 observation = self.reset_env(initial_state)
 
 
@@ -192,7 +193,7 @@ if __name__ == '__main__':
     # Example data for multiple trajectories
     time = np.arange(0, 5.05, 0.05)
     trajectories = []
-    initial_states = np.array([[np.pi/8, 0], [np.pi/4, 0], [-np.pi/8, 0]])
+    initial_states = np.array([[np.pi/8, 0], [np.pi/6,  0.], [-np.pi/8, 0]])
     for initial_state in initial_states:
         trajectory= lqr.simulate(initial_state, time)
         trajectories.append(trajectory)

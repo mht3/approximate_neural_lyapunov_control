@@ -1,5 +1,6 @@
 '''
-See gymnasium cartpole environment: https://gymnasium.farama.org/environments/classic_control/cart_pole/
+Visualization for Neural Lyapunov with the inverted pendulum environment.
+Set show_gui to True to run the AI GYM env with the trained policy
 '''
 # NOTE run with: python examples/cartpole/cartpole_neural_lyapunov.py
 
@@ -33,7 +34,6 @@ class NeuralLyaponovControl():
         x_val, y_val, theta_dot = observation
         # subtract 90 degrees because 0 degrees is at top
         theta = np.arctan2(x_val, -y_val) - (np.pi / 2)
-        print(theta, self.env.unwrapped.state[0])
         x_tensor = torch.Tensor([theta, theta_dot])
         # pass through trained model
         V, u_tensor = self.controller(x_tensor)
@@ -42,7 +42,7 @@ class NeuralLyaponovControl():
 
 
     def control(self, noisy_observer=False):
-        initial_state = np.random.uniform([-np.pi/2, -0.5], [np.pi/2, 0.5], size=2)
+        initial_state = np.random.uniform([-np.pi/4, -0.5], [np.pi/4, 0.5], size=2)
         observation = self.reset_env(initial_state)
         self.env.unwrapped.state = initial_state
         for _ in range(1000):
@@ -54,7 +54,7 @@ class NeuralLyaponovControl():
             if noisy_observer:
                 observation += np.random.normal(0, 0.15, 3)
             if terminated or truncated:
-                initial_state = np.random.uniform([-np.pi/2, -0.5], [np.pi/2, 0.5], size=2)
+                initial_state = np.random.uniform([-np.pi/4, -0.5], [np.pi/4, 0.5], size=2)
                 observation = self.reset_env(initial_state)
 
         self.env.close()
@@ -98,13 +98,15 @@ def load_model(pt_path):
 
 
 if __name__ == '__main__':
-    show_gui = True
+    show_gui = False
     noisy_observer = False
     if show_gui:
         env = gym.make('Pendulum-v1', render_mode="human", g=9.81)
     else: 
         env = gym.make('Pendulum-v1', g=9.81)
-    controller = load_model('examples/inverted_pendulum/models/pendulum_lyapunov_model_1.pt')
+
+    # appx dynamics policy.
+    controller = load_model('examples/inverted_pendulum/models/pendulum_lyapunov_model_true.pt')
 
     nlc = NeuralLyaponovControl(env, controller)
     if show_gui:
@@ -113,7 +115,7 @@ if __name__ == '__main__':
     # Example data for multiple trajectories
     time = np.arange(0, 5.05, 0.05)
     trajectories = []
-    initial_states = np.array([[np.pi/8, 0], [np.pi/4, 0], [-np.pi/8, 0]])
+    initial_states = np.array([[np.pi/8, 0], [np.pi/6,  0.], [-np.pi/8, 0]])
     for initial_state in initial_states:
         trajectory= nlc.simulate(initial_state, time)
         trajectories.append(trajectory)
